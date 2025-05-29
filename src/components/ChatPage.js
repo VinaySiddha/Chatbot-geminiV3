@@ -11,7 +11,12 @@ import HistoryModal from './HistoryModal';
 import FileUploadWidget from './FileUploadWidget';
 import FileManagerWidget from './FileManagerWidget';
 
-import './ChatPage.css';
+import './ChatPage.css'; // Ensure this is imported
+
+// Web Speech API Polyfills (optional, for broader browser support if needed, but modern browsers are good)
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const speechSynthesis = window.speechSynthesis;
+
 
 const ChatPage = ({ setIsAuthenticated }) => {
     const [messages, setMessages] = useState([]);
@@ -19,79 +24,71 @@ const ChatPage = ({ setIsAuthenticated }) => {
     const [isLoading, setIsLoading] = useState(false);
     const [isRagLoading, setIsRagLoading] = useState(false);
     const [error, setError] = useState('');
-    const [sessionId, setSessionId] = useState(''); // Initialize empty, set from localStorage
-    const [userId, setUserId] = useState(''); // Initialize empty, set from localStorage
-    const [username, setUsername] = useState(''); // Initialize empty, set from localStorage
+    const [sessionId, setSessionId] = useState('');
+    const [userId, setUserId] = useState('');
+    const [username, setUsername] = useState('');
     const [currentSystemPromptId, setCurrentSystemPromptId] = useState('friendly');
     const [editableSystemPromptText, setEditableSystemPromptText] = useState(() => getPromptTextById('friendly'));
     const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
     const [fileRefreshTrigger, setFileRefreshTrigger] = useState(0);
     const [hasFiles, setHasFiles] = useState(false);
     const [isRagEnabled, setIsRagEnabled] = useState(false);
+    const [selectedOriginalNamesForRag, setSelectedOriginalNamesForRag] = useState([]); // For selected files
+
+    // STT states
+    const [isRecording, setIsRecording] = useState(false);
+    const [sttError, setSttError] = useState('');
+    const recognitionRef = useRef(null);
+
+    // TTS states
+    const [isTtsEnabled, setIsTtsEnabled] = useState(false);
 
     const messagesEndRef = useRef(null);
     const navigate = useNavigate();
 
-    // --- Effects ---
     useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
-    // Validate auth info on mount
     useEffect(() => {
         const storedSessionId = localStorage.getItem('sessionId');
         const storedUserId = localStorage.getItem('userId');
         const storedUsername = localStorage.getItem('username');
+        const storedTtsEnabled = localStorage.getItem('ttsEnabled') === 'true';
 
         if (!storedUserId || !storedSessionId || !storedUsername) {
-            console.warn("ChatPage Mount: Missing auth info in localStorage. Redirecting to login.");
-            handleLogout(true); // Use logout function for cleanup
+            handleLogout(true);
         } else {
-            console.log("ChatPage Mount: Auth info found. Setting state.");
             setSessionId(storedSessionId);
             setUserId(storedUserId);
             setUsername(storedUsername);
+            setIsTtsEnabled(storedTtsEnabled);
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []); // Run ONCE on mount
+    }, []);
 
-    // Check for user files on mount and refresh, only if userId is set
     useEffect(() => {
         const checkUserFiles = async () => {
-            // Ensure userId is available before fetching
             const currentUserId = localStorage.getItem('userId');
             if (!currentUserId) {
-                console.log("User files check skipped: No userId available.");
-                setHasFiles(false);
-                setIsRagEnabled(false);
+                setHasFiles(false); setIsRagEnabled(false);
                 return;
             }
-            console.log("Checking user files for userId:", currentUserId);
             try {
-                const response = await getUserFiles(); // API interceptor adds the header
+                const response = await getUserFiles();
                 const filesExist = response.data && response.data.length > 0;
                 setHasFiles(filesExist);
-                setIsRagEnabled(filesExist); // Enable RAG by default if files exist
-                console.log("User files check successful:", filesExist ? `${response.data.length} files found. RAG default: ${filesExist}` : "No files found. RAG default: false");
+                // Only default RAG to true if files exist AND it wasn't manually turned off
+                // Let's simplify: default to true if files exist, user can toggle.
+                setIsRagEnabled(filesExist);
             } catch (err) {
-                console.error("Error checking user files:", err);
-                if (err.response?.status === 401 && !window.location.pathname.includes('/login')) {
-                     console.warn("Received 401 checking files, logging out.");
-                     handleLogout(true);
-                } else {
-                    setError("Could not check user files.");
-                    setHasFiles(false);
-                    setIsRagEnabled(false);
-                }
+                if (err.response?.status === 401 && !window.location.pathname.includes('/login')) handleLogout(true);
+                else setError("Could not check user files.");
+                setHasFiles(false); setIsRagEnabled(false);
             }
         };
-
-        // Only run if userId is set (from the initial mount effect)
-        if (userId) {
-            checkUserFiles();
-        }
+        if (userId) checkUserFiles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [userId, fileRefreshTrigger]); // Re-check when userId is set or file list might change
+    }, [userId, fileRefreshTrigger]);
 
-    // --- Callback Definitions ---
     const triggerFileRefresh = useCallback(() => setFileRefreshTrigger(prev => prev + 1), []);
     const handlePromptSelectChange = useCallback((newId) => {
         setCurrentSystemPromptId(newId); setEditableSystemPromptText(getPromptTextById(newId));
@@ -106,107 +103,93 @@ const ChatPage = ({ setIsAuthenticated }) => {
     const handleHistory = useCallback(() => setIsHistoryModalOpen(true), []);
     const closeHistoryModal = useCallback(() => setIsHistoryModalOpen(false), []);
 
+    const handleSelectedFilesChange = useCallback((newSelectedOriginalNames) => {
+        setSelectedOriginalNamesForRag(newSelectedOriginalNames);
+    }, []);
+
+    const speakText = useCallback((text) => {
+        if (!speechSynthesis || !isTtsEnabled || !text) return;
+        try {
+            speechSynthesis.cancel(); // Stop any ongoing speech
+            const utterance = new SpeechSynthesisUtterance(text);
+            // Optional: Configure voice, rate, pitch
+            // const voices = speechSynthesis.getVoices();
+            // utterance.voice = voices.find(v => v.lang.startsWith('en')); // Find an English voice
+            // utterance.rate = 0.9;
+            speechSynthesis.speak(utterance);
+        } catch (e) {
+            console.error("Speech synthesis error:", e);
+            setError("Could not play audio response.");
+        }
+    }, [isTtsEnabled]);
+
     const saveAndReset = useCallback(async (isLoggingOut = false, onCompleteCallback = null) => {
-        const currentSessionId = localStorage.getItem('sessionId'); // Get fresh ID
-        const currentUserId = localStorage.getItem('userId'); // Get fresh ID
+        // ... (saveAndReset logic from your provided ChatPage.js, no major changes needed here for these features) ...
+        // Ensure speakText is cancelled if a new chat starts or on logout
+        if (speechSynthesis) speechSynthesis.cancel();
+        const currentSessionId = localStorage.getItem('sessionId');
+        const currentUserId = localStorage.getItem('userId');
         const messagesToSave = [...messages];
 
         if (!currentSessionId || !currentUserId) {
-             console.error("Save Error: Session ID or User ID missing.");
              setError("Critical Error: Session info missing.");
-             if (onCompleteCallback) onCompleteCallback();
-             return;
+             if (onCompleteCallback) onCompleteCallback(); return;
         }
-        if (isLoading || isRagLoading || messagesToSave.length === 0) {
-             if (onCompleteCallback) onCompleteCallback();
-             return;
+        if (isLoading || isRagLoading || messagesToSave.length === 0 && !isLoggingOut) { // Allow save on logout even if no messages
+             if (onCompleteCallback) onCompleteCallback(); return;
         }
 
-        let newSessionId = null;
-        setIsLoading(true);
-        setError(prev => prev && (prev.includes("Session invalid") || prev.includes("Critical Error")) ? prev : '');
-
+        let newSessionId = null; setIsLoading(true); setError('');
         try {
-            console.log(`Saving history for session: ${currentSessionId} (User: ${currentUserId})`);
-            // API interceptor will add the x-user-id header
             const response = await saveChatHistory({ sessionId: currentSessionId, messages: messagesToSave });
             newSessionId = response.data.newSessionId;
             if (!newSessionId) throw new Error("Backend failed to provide new session ID.");
-
-            localStorage.setItem('sessionId', newSessionId);
-            setSessionId(newSessionId);
+            localStorage.setItem('sessionId', newSessionId); setSessionId(newSessionId);
             setMessages([]);
-            if (!isLoggingOut) {
-                handlePromptSelectChange('friendly');
-                setError('');
-            }
-            console.log(`History saved. New session ID: ${newSessionId}`);
-
+            if (!isLoggingOut) handlePromptSelectChange('friendly');
         } catch (err) {
-            const failErrorMsg = err.response?.data?.message || err.message || 'Failed to save/reset session.';
-            console.error("Save/Reset Error:", err.response || err);
-            setError(`Session Error: ${failErrorMsg}`);
-            if (err.response?.status === 401 && !isLoggingOut) {
-                 console.warn("Received 401 saving history, logging out.");
-                 handleLogout(true); // Force logout if save fails due to auth
-                 // Don't proceed with client-side session generation if auth failed
-            } else if (!newSessionId && !isLoggingOut) {
-                 newSessionId = uuidv4();
-                 localStorage.setItem('sessionId', newSessionId);
-                 setSessionId(newSessionId);
-                 setMessages([]);
-                 handlePromptSelectChange('friendly');
-                 console.warn("Save failed, generated new client-side session ID:", newSessionId);
-            } else if (isLoggingOut && !newSessionId) {
-                 console.error("Save failed during logout.");
+            setError(`Session Error: ${err.response?.data?.message || err.message}`);
+            if (err.response?.status === 401 && !isLoggingOut) handleLogout(true);
+            else if (!newSessionId && !isLoggingOut) {
+                 newSessionId = uuidv4(); localStorage.setItem('sessionId', newSessionId); setSessionId(newSessionId);
+                 setMessages([]); handlePromptSelectChange('friendly');
             }
         } finally {
-            setIsLoading(false);
-            if (onCompleteCallback) onCompleteCallback();
+            setIsLoading(false); if (onCompleteCallback) onCompleteCallback();
         }
-    }, [messages, isLoading, isRagLoading, handlePromptSelectChange]); // Removed userId/sessionId state deps, use localStorage directly
+    }, [messages, isLoading, isRagLoading, handlePromptSelectChange]);
+
 
     const handleLogout = useCallback((skipSave = false) => {
+        // ... (handleLogout logic from your provided ChatPage.js) ...
+        if (speechSynthesis) speechSynthesis.cancel();
         const performCleanup = () => {
-            console.log("Performing logout cleanup...");
-            localStorage.clear(); // Clear everything
-            setIsAuthenticated(false);
-            setMessages([]); setSessionId(''); setUserId(''); setUsername(''); // Clear state
-            setCurrentSystemPromptId('friendly');
-            setEditableSystemPromptText(getPromptTextById('friendly')); setError('');
-            setHasFiles(false); setIsRagEnabled(false);
-            // Ensure navigation happens after state updates
-            requestAnimationFrame(() => {
-                 if (window.location.pathname !== '/login') {
-                     navigate('/login', { replace: true });
-                 }
-            });
+            localStorage.clear(); setIsAuthenticated(false);
+            setMessages([]); setSessionId(''); setUserId(''); setUsername('');
+            setCurrentSystemPromptId('friendly'); setEditableSystemPromptText(getPromptTextById('friendly'));
+            setError(''); setHasFiles(false); setIsRagEnabled(false); setSelectedOriginalNamesForRag([]);
+            setIsRecording(false); if (recognitionRef.current) recognitionRef.current.abort();
+            setIsTtsEnabled(false);
+            requestAnimationFrame(() => { if (window.location.pathname !== '/login') navigate('/login', { replace: true }); });
         };
-        if (!skipSave && messages.length > 0) {
-             saveAndReset(true, performCleanup);
-        } else {
-             performCleanup();
-        }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        if (!skipSave && messages.length > 0) saveAndReset(true, performCleanup);
+        else performCleanup();
     }, [navigate, setIsAuthenticated, saveAndReset, messages.length]);
 
-    const handleNewChat = useCallback(() => {
-        if (!isLoading && !isRagLoading) {
-             saveAndReset(false);
-        }
-     }, [isLoading, isRagLoading, saveAndReset]);
+    const handleNewChat = useCallback(() => { if (!isLoading && !isRagLoading) saveAndReset(false); }, [isLoading, isRagLoading, saveAndReset]);
 
     const handleSendMessage = useCallback(async (e) => {
         if (e) e.preventDefault();
+        if (speechSynthesis) speechSynthesis.cancel(); // Stop TTS if user sends new message
+
         const textToSend = inputText.trim();
-        const currentSessionId = localStorage.getItem('sessionId'); // Get fresh ID
-        const currentUserId = localStorage.getItem('userId'); // Get fresh ID
+        const currentSessionId = localStorage.getItem('sessionId');
+        const currentUserId = localStorage.getItem('userId');
 
         if (!textToSend || isLoading || isRagLoading || !currentSessionId || !currentUserId) {
             if (!currentSessionId || !currentUserId) {
-                 setError("Session invalid. Please refresh or log in again.");
-                 // Optionally trigger logout if auth info is missing
-                 if (!currentUserId) handleLogout(true);
+                setError("Session invalid. Please refresh or log in again.");
+                if (!currentUserId) handleLogout(true);
             }
             return;
         }
@@ -214,105 +197,127 @@ const ChatPage = ({ setIsAuthenticated }) => {
         const newUserMessage = { role: 'user', parts: [{ text: textToSend }], timestamp: new Date() };
         const previousMessages = messages;
         setMessages(prev => [...prev, newUserMessage]);
-        setInputText('');
-        setError('');
+        setInputText(''); setError('');
 
-        let relevantDocs = [];
+        let ragDocsForPayload = [];
         let ragError = null;
 
         if (isRagEnabled) {
             setIsRagLoading(true);
             try {
-                console.log("RAG Enabled: Querying backend /rag endpoint...");
-                // Interceptor adds user ID header
-                const ragResponse = await queryRagService({ message: textToSend });
-                relevantDocs = ragResponse.data.relevantDocs || [];
-                console.log(`RAG Query returned ${relevantDocs.length} documents.`);
-            } catch (err) {
-                console.error("RAG Query Error:", err.response || err);
-                ragError = err.response?.data?.message || "Failed to retrieve documents for RAG.";
-                if (err.response?.status === 401) {
-                     console.warn("Received 401 during RAG query, logging out.");
-                     handleLogout(true);
-                     setIsRagLoading(false); // Stop loading before returning
-                     return; // Stop processing if auth failed
+                const payload = { message: textToSend };
+                if (selectedOriginalNamesForRag.length > 0) {
+                    payload.targetOriginalNames = selectedOriginalNamesForRag;
                 }
+                const ragResponse = await queryRagService(payload);
+                ragDocsForPayload = ragResponse.data.relevantDocs || [];
+            } catch (err) {
+                ragError = err.response?.data?.message || "Failed to retrieve documents for RAG.";
+                if (err.response?.status === 401) { handleLogout(true); setIsRagLoading(false); return; }
             } finally {
                 setIsRagLoading(false);
             }
-        } else {
-            console.log("RAG Disabled: Skipping RAG query.");
         }
 
         setIsLoading(true);
-        const historyForAPI = previousMessages;
-        const systemPromptToSend = editableSystemPromptText;
-
         try {
-            if (ragError) {
-                 setError(prev => prev ? `${prev} | RAG Error: ${ragError}` : `RAG Error: ${ragError}`);
-            }
-
-            console.log(`Sending message to backend /message. RAG Enabled: ${isRagEnabled}, Docs Found: ${relevantDocs.length}`);
-            // Interceptor adds user ID header
+            if (ragError) setError(prev => prev ? `${prev} | RAG Error: ${ragError}` : `RAG Error: ${ragError}`);
             const sendMessageResponse = await sendMessage({
-                message: textToSend,
-                history: historyForAPI,
-                sessionId: currentSessionId,
-                systemPrompt: systemPromptToSend,
-                isRagEnabled: isRagEnabled,
-                relevantDocs: relevantDocs
+                message: textToSend, history: previousMessages, sessionId: currentSessionId,
+                systemPrompt: editableSystemPromptText, isRagEnabled: isRagEnabled,
+                relevantDocs: ragDocsForPayload // Use the docs fetched (or empty if RAG off/failed/no selection meant all)
             });
-
             const modelReply = sendMessageResponse.data.reply;
             if (modelReply?.role && modelReply?.parts?.length > 0) {
                 setMessages(prev => [...prev, modelReply]);
-            } else {
-                throw new Error("Invalid reply structure received from backend.");
-            }
+                speakText(modelReply.parts[0].text); // TTS for model reply
+            } else throw new Error("Invalid reply structure received.");
             setError(prev => prev && (prev.includes("Session invalid") || prev.includes("Critical Error")) ? prev : '');
-
         } catch (err) {
-            const errorMessage = err.response?.data?.message || err.message || 'Failed to get response.';
-            setError(prev => prev ? `${prev} | Chat Error: ${errorMessage}` : `Chat Error: ${errorMessage}`);
-            console.error("Send Message Error:", err.response || err);
-            setMessages(previousMessages); // Rollback UI
-            if (err.response?.status === 401 && !window.location.pathname.includes('/login')) {
-                 console.warn("Received 401 sending message, logging out.");
-                 handleLogout(true);
-            }
+            setError(prev => prev ? `${prev} | Chat Error: ${err.response?.data?.message || err.message}` : `Chat Error: ${err.response?.data?.message || err.message}`);
+            setMessages(previousMessages);
+            if (err.response?.status === 401 && !window.location.pathname.includes('/login')) handleLogout(true);
         } finally {
             setIsLoading(false);
         }
-    }, [inputText, isLoading, isRagLoading, messages, editableSystemPromptText, isRagEnabled, handleLogout]); // Removed sessionId/userId state deps
+    }, [inputText, isLoading, isRagLoading, messages, editableSystemPromptText, isRagEnabled, selectedOriginalNamesForRag, handleLogout, speakText]);
 
-    const handleEnterKey = useCallback((e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleSendMessage();
+    const handleEnterKey = useCallback((e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }, [handleSendMessage]);
+    const handleRagToggle = (event) => setIsRagEnabled(event.target.checked);
+
+    // --- STT Logic ---
+    const handleToggleRecording = () => {
+        if (!SpeechRecognition) {
+            setSttError("Speech recognition is not supported by your browser.");
+            return;
         }
-    }, [handleSendMessage]);
+        if (isRecording) {
+            recognitionRef.current?.stop();
+            setIsRecording(false);
+        } else {
+            recognitionRef.current = new SpeechRecognition();
+            recognitionRef.current.continuous = true; // Keep listening
+            recognitionRef.current.interimResults = true;
+            recognitionRef.current.lang = 'en-US';
 
-    const handleRagToggle = (event) => {
-        setIsRagEnabled(event.target.checked);
+            let finalTranscript = inputText; // Start with current input text
+
+            recognitionRef.current.onstart = () => setIsRecording(true);
+            recognitionRef.current.onend = () => setIsRecording(false);
+            recognitionRef.current.onerror = (event) => {
+                setSttError(`Speech recognition error: ${event.error}`);
+                setIsRecording(false);
+            };
+            recognitionRef.current.onresult = (event) => {
+                let interimTranscript = '';
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i][0].transcript.trim() + ' ';
+                    } else {
+                        interimTranscript += event.results[i][0].transcript;
+                    }
+                }
+                setInputText(finalTranscript + interimTranscript);
+            };
+            try {
+                recognitionRef.current.start();
+                setSttError('');
+            } catch (e) {
+                setSttError("Failed to start speech recognition. Check microphone permissions.");
+                setIsRecording(false);
+            }
+        }
     };
 
-    const isProcessing = isLoading || isRagLoading;
+    // --- TTS Logic ---
+    const toggleTts = () => {
+        const newTtsState = !isTtsEnabled;
+        setIsTtsEnabled(newTtsState);
+        localStorage.setItem('ttsEnabled', newTtsState.toString());
+        if (!newTtsState && speechSynthesis) {
+            speechSynthesis.cancel(); // Stop speech if TTS is turned off
+        }
+    };
 
-    // Render loading or null if userId isn't set yet
-    if (!userId) {
-        return <div className="loading-indicator"><span>Initializing...</span></div>; // Or some other placeholder
-    }
+    // --- RAG Status Display ---
+    const getRagStatusMessage = () => {
+        if (!isRagEnabled) return "RAG Disabled";
+        if (selectedOriginalNamesForRag.length > 0) {
+            return `RAG (Files: ${selectedOriginalNamesForRag.slice(0, 2).join(', ')}${selectedOriginalNamesForRag.length > 2 ? '...' : ''})`;
+        }
+        return hasFiles ? "RAG (All user files)" : "RAG (No user files)";
+    };
+
+
+    const isProcessing = isLoading || isRagLoading;
+    if (!userId) return <div className="loading-indicator"><span>Initializing Chat...</span></div>;
 
     return (
         <div className="chat-page-container">
             <div className="sidebar-area">
-                 <SystemPromptWidget
-                    selectedPromptId={currentSystemPromptId} promptText={editableSystemPromptText}
-                    onSelectChange={handlePromptSelectChange} onTextChange={handlePromptTextChange}
-                 />
+                 <SystemPromptWidget selectedPromptId={currentSystemPromptId} promptText={editableSystemPromptText} onSelectChange={handlePromptSelectChange} onTextChange={handlePromptTextChange} />
                 <FileUploadWidget onUploadSuccess={triggerFileRefresh} />
-                <FileManagerWidget refreshTrigger={fileRefreshTrigger} />
+                <FileManagerWidget refreshTrigger={fileRefreshTrigger} onSelectedFilesChange={handleSelectedFilesChange} isRagEnabled={isRagEnabled} />
             </div>
 
             <div className="chat-container">
@@ -320,6 +325,9 @@ const ChatPage = ({ setIsAuthenticated }) => {
                     <h1>Engineering Tutor</h1>
                     <div className="header-controls">
                         <span className="username-display">Hi, {username}!</span>
+                        <button onClick={toggleTts} className={`header-button tts-toggle-button ${isTtsEnabled ? 'tts-enabled' : ''}`} title={isTtsEnabled ? "Disable Text-to-Speech" : "Enable Text-to-Speech"}>
+                            {isTtsEnabled ? '🔊' : '🔈'} {/* Speaker Icons */}
+                        </button>
                         <button onClick={handleHistory} className="header-button history-button" disabled={isProcessing}>History</button>
                         <button onClick={handleNewChat} className="header-button newchat-button" disabled={isProcessing}>New Chat</button>
                         <button onClick={() => handleLogout(false)} className="header-button logout-button" disabled={isProcessing}>Logout</button>
@@ -328,21 +336,14 @@ const ChatPage = ({ setIsAuthenticated }) => {
 
                  <div className="messages-area">
                     {messages.map((msg, index) => {
-                         if (!msg?.role || !msg?.parts?.length || !msg.timestamp) {
-                            console.warn("Rendering invalid message structure at index", index, msg);
-                            return <div key={`error-${index}`} className="message-error">Msg Error</div>;
-                         }
+                         if (!msg?.role || !msg?.parts?.length || !msg.timestamp) return <div key={`error-${index}`} className="message-error">Msg Error</div>;
                          const messageText = msg.parts[0]?.text || '';
                          return (
                             <div key={`${sessionId}-${index}`} className={`message ${msg.role}`}>
                                 <div className="message-content">
-                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                        {messageText}
-                                    </ReactMarkdown>
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{messageText}</ReactMarkdown>
                                 </div>
-                                <span className="message-timestamp">
-                                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                </span>
+                                <span className="message-timestamp">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                             </div>
                          );
                     })}
@@ -350,16 +351,28 @@ const ChatPage = ({ setIsAuthenticated }) => {
                  </div>
 
                 {isProcessing && <div className="loading-indicator"><span>{isRagLoading ? 'Searching documents...' : 'Thinking...'}</span></div>}
-                {!isProcessing && error && <div className="error-indicator">{error}</div>}
+                {(!isProcessing && error) && <div className="error-indicator">{error}</div>}
+                {(!isProcessing && sttError) && <div className="error-indicator stt-error-indicator">{sttError}</div>}
+                <div className="rag-status-display">{getRagStatusMessage()}</div>
+
 
                 <footer className="input-area">
+                    <button
+                        type="button"
+                        onClick={handleToggleRecording}
+                        className={`mic-button ${isRecording ? 'recording' : ''}`}
+                        disabled={isProcessing || !SpeechRecognition}
+                        title={isRecording ? "Stop Recording" : "Start Voice Input"}
+                        aria-label={isRecording ? "Stop Recording" : "Start Voice Input"}
+                    >
+                        🎤
+                    </button>
                     <textarea
                         value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={handleEnterKey}
                         placeholder="Ask your tutor..." rows="1" disabled={isProcessing} aria-label="Chat input"
                     />
-                    <div className="rag-toggle-container" title={!hasFiles ? "Upload files to enable RAG" : (isRagEnabled ? "Disable RAG (Retrieval-Augmented Generation)" : "Enable RAG (Retrieval-Augmented Generation)")}>
-                        <input type="checkbox" id="rag-toggle" checked={isRagEnabled} onChange={handleRagToggle}
-                               disabled={!hasFiles || isProcessing} aria-label="Enable RAG" />
+                    <div className="rag-toggle-container" title={!hasFiles ? "Upload files to enable RAG" : (isRagEnabled ? "Disable RAG" : "Enable RAG")}>
+                        <input type="checkbox" id="rag-toggle" checked={isRagEnabled} onChange={handleRagToggle} disabled={!hasFiles || isProcessing} aria-label="Enable RAG" />
                         <label htmlFor="rag-toggle">RAG</label>
                     </div>
                     <button onClick={handleSendMessage} disabled={isProcessing || !inputText.trim()} title="Send Message" aria-label="Send message">
@@ -369,9 +382,7 @@ const ChatPage = ({ setIsAuthenticated }) => {
                     </button>
                 </footer>
             </div>
-
             <HistoryModal isOpen={isHistoryModalOpen} onClose={closeHistoryModal} />
-
         </div>
     );
 };

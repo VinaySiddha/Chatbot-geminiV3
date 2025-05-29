@@ -87,20 +87,19 @@ api.interceptors.response.use(
 );
 // --- End Interceptors ---
 
-
-// --- NAMED EXPORTS for API functions ---
+// client/src/services/api.js
+// ... (axios instance and interceptors as before) ...
 
 // Authentication
 export const signupUser = (userData) => api.post('/auth/signup', userData);
 export const signinUser = (userData) => api.post('/auth/signin', userData);
 
 // Chat Interaction
-// messageData includes { message, history, sessionId, systemPrompt, isRagEnabled, relevantDocs }
 export const sendMessage = (messageData) => api.post('/chat/message', messageData);
 export const saveChatHistory = (historyData) => api.post('/chat/history', historyData);
 
 // RAG Query
-// queryData includes { message }
+// queryData can be { message } or { message, targetOriginalNames }
 export const queryRagService = (queryData) => api.post('/chat/rag', queryData);
 
 // Chat History Retrieval
@@ -108,7 +107,6 @@ export const getChatSessions = () => api.get('/chat/sessions');
 export const getSessionDetails = (sessionId) => api.get(`/chat/session/${sessionId}`);
 
 // File Upload
-// Pass FormData directly
 export const uploadFile = (formData) => api.post('/upload', formData);
 
 // File Management
@@ -116,7 +114,4 @@ export const getUserFiles = () => api.get('/files');
 export const renameUserFile = (serverFilename, newOriginalName) => api.patch(`/files/${serverFilename}`, { newOriginalName });
 export const deleteUserFile = (serverFilename) => api.delete(`/files/${serverFilename}`);
 
-
-// --- DEFAULT EXPORT ---
-// Export the configured Axios instance if needed for direct use elsewhere
 export default api;
