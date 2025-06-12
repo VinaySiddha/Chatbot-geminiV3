@@ -274,7 +274,13 @@ def load_or_create_index(user_id):
         # Don't re-raise here if app.py handles it, but ensure logging is clear
         #
 
-def query_index(user_id, query_text, k=3):
+# server/rag_service/faiss_handler.py
+# ... (imports and setup as before) ...
+
+# ... (get_embedding_dimension, get_embedding_model, get_user_index_path, _delete_index_files, load_or_create_index, add_documents_to_index, save_index, ensure_faiss_dir as before) ...
+# Ensure all previous functions are present.
+
+def query_index(user_id, query_text, k=3, target_original_names=None): # Added target_original_names
     all_results_with_scores = []
     embedder = get_embedding_model()
 
@@ -284,72 +290,87 @@ def query_index(user_id, query_text, k=3):
 
     try:
         start_time = time.time()
-        user_index = None # Initialize to None
-        default_index = None # Initialize to None
+        
+        # --- Determine if specific files are targeted ---
+        is_targeted_query = target_original_names and isinstance(target_original_names, list) and len(target_original_names) > 0
+        target_files_set = set(target_original_names) if is_targeted_query else set()
 
-        # Query User Index
+        # --- Query User Index ---
         try:
-            user_index = load_or_create_index(user_id) # Assign to user_index
+            user_index = load_or_create_index(user_id)
             if hasattr(user_index, 'index') and user_index.index is not None and user_index.index.ntotal > 0:
-                logger.info(f"Querying index for user: '{user_id}' (Dim: {user_index.index.d}, Vectors: {user_index.index.ntotal}) with k={k}")
-                user_results = user_index.similarity_search_with_score(query_text, k=k)
-                logger.info(f"User index '{user_id}' query returned {len(user_results)} results.")
+                filter_lambda = None
+                query_desc = f"Querying index for user: '{user_id}'"
+                if is_targeted_query:
+                    # IMPORTANT: The metadata key for original filename is 'documentName'
+                    filter_lambda = lambda d: d.metadata.get("documentName") in target_files_set
+                    query_desc += f" (targeting files: {', '.join(list(target_files_set)[:3])}{'...' if len(target_files_set) > 3 else ''})"
+                
+                logger.info(f"{query_desc} with k={k}")
+                
+                # Use the filter if provided
+                user_results = user_index.similarity_search_with_score(
+                    query_text, 
+                    k=k, 
+                    filter=filter_lambda # Pass the filter here
+                )
+                logger.info(f"User index '{user_id}' query (filter: {'yes' if filter_lambda else 'no'}) returned {len(user_results)} results.")
                 all_results_with_scores.extend(user_results)
             else:
                 logger.info(f"Skipping query for user '{user_id}': Index is empty or invalid.")
         except FileNotFoundError:
-            logger.warning(f"User index files for '{user_id}' not found on disk (might be first time). Skipping query for this index.")
+            logger.warning(f"User index files for '{user_id}' not found. Skipping query for this index.")
         except RuntimeError as e:
             logger.error(f"Could not load or create user index for '{user_id}': {e}", exc_info=True)
         except Exception as e:
             logger.error(f"Unexpected error querying user index for '{user_id}': {e}", exc_info=True)
 
-
-        # Query Default Index (if different from user_id)
-        if user_id != config.DEFAULT_INDEX_USER_ID:
+        # --- Query Default Index (ONLY if NOT a targeted query) ---
+        if user_id != config.DEFAULT_INDEX_USER_ID and not is_targeted_query:
             try:
-                default_index = load_or_create_index(config.DEFAULT_INDEX_USER_ID) # Assign to default_index
+                default_index = load_or_create_index(config.DEFAULT_INDEX_USER_ID)
                 if hasattr(default_index, 'index') and default_index.index is not None and default_index.index.ntotal > 0:
-                    logger.info(f"Querying default index '{config.DEFAULT_INDEX_USER_ID}' (Dim: {default_index.index.d}, Vectors: {default_index.index.ntotal}) with k={k}")
+                    logger.info(f"Querying default index '{config.DEFAULT_INDEX_USER_ID}' with k={k}")
                     default_results = default_index.similarity_search_with_score(query_text, k=k)
                     logger.info(f"Default index '{config.DEFAULT_INDEX_USER_ID}' query returned {len(default_results)} results.")
                     all_results_with_scores.extend(default_results)
                 else:
                     logger.info(f"Skipping query for default index '{config.DEFAULT_INDEX_USER_ID}': Index is empty or invalid.")
             except FileNotFoundError:
-                 logger.warning(f"Default index '{config.DEFAULT_INDEX_USER_ID}' not found on disk (run default.py?). Skipping query.")
+                 logger.warning(f"Default index '{config.DEFAULT_INDEX_USER_ID}' not found. Skipping query.")
             except RuntimeError as e:
                 logger.error(f"Could not load or create default index '{config.DEFAULT_INDEX_USER_ID}': {e}", exc_info=True)
             except Exception as e:
                 logger.error(f"Unexpected error querying default index '{config.DEFAULT_INDEX_USER_ID}': {e}", exc_info=True)
+        elif is_targeted_query:
+            logger.info(f"Skipping default index query because specific files were targeted for user '{user_id}'.")
+
 
         query_time = time.time()
         logger.info(f"Completed all index queries in {query_time - start_time:.2f} seconds. Found {len(all_results_with_scores)} raw results.")
 
-        # --- Deduplication and Sorting ---
+        # Deduplication and Sorting (remains the same)
         unique_results = {}
         for doc, score in all_results_with_scores:
             if not doc or not hasattr(doc, 'metadata') or not hasattr(doc, 'page_content'):
                 logger.warning(f"Skipping invalid document object in results: {doc}")
                 continue
-
-            # Use the fallback content-based key
             content_key = f"{doc.metadata.get('documentName', 'Unknown')}_{doc.page_content[:200]}"
-            unique_key = content_key # Use the content key directly
-
-            # Add or update if the new score is better (lower for L2 distance / IP distance if normalized)
-            if unique_key not in unique_results or score < unique_results[unique_key][1]:
-                unique_results[unique_key] = (doc, score)
-
-        # Sort by score (ascending for L2 distance / IP distance)
+            if content_key not in unique_results or score < unique_results[content_key][1]: # Lower score is better
+                unique_results[content_key] = (doc, score)
+        
         sorted_results = sorted(unique_results.values(), key=lambda item: item[1])
-        final_results = sorted_results[:k] # Get top k unique results
+        final_results = sorted_results[:k]
 
         logger.info(f"Returning {len(final_results)} unique results after filtering and sorting.")
         return final_results
     except Exception as e:
         logger.error(f"Error during query processing for user '{user_id}': {e}", exc_info=True)
-        return [] # Return empty list on error
+        return []
+
+# Make sure other functions like ensure_faiss_dir, get_embedding_model etc are correctly defined
+# in your actual faiss_handler.py file.
+# The core change is within query_index.
 
 
 def save_index(user_id):

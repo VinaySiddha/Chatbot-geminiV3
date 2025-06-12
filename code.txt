@@ -1778,6 +1778,7 @@ gunicorn --bind 0.0.0.0:5002 server.rag_service.app:app
 `server/rag_service/requirements.txt`
 
 ```
+<<<<<<< HEAD
 blinker==1.9.0
 click==8.2.0
 colorama==0.4.6
@@ -1786,6 +1787,22 @@ itsdangerous==2.2.0
 Jinja2==3.1.6
 MarkupSafe==3.0.2
 Werkzeug==3.1.3
+=======
+Flask
+requests
+sentence-transformers
+faiss-cpu # or faiss-gpu
+langchain
+langchain-huggingface
+pypdf
+PyPDF2
+python-docx
+python-dotenv
+ollama # Keep if using Ollama embeddings
+python-pptx # Added for PPTX parsing
+uuid
+
+>>>>>>> 1dc47d7713352974602a83a9273223c8f547e07b
 
 ```
 
@@ -2988,7 +3005,11 @@ configureAndStart();
 `server/services/.env`
 
 ```
+<<<<<<< HEAD
 GEMINI_API_KEY="AIzaSyC-qa1FWlOxmD6i8aLxd6-PZxIOmbzF7ks"
+=======
+GEMINI_API_KEY="AIzaSyDs2GE0ttB2Q93w5SsW03SKXb1edNMbdcU"
+>>>>>>> 1dc47d7713352974602a83a9273223c8f547e07b
 ```
 
 `server/services/geminiService.js`
@@ -2999,8 +3020,12 @@ const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@googl
 require('dotenv').config(); // Removed dotenv
 
 // Read API Key directly from environment variables
+<<<<<<< HEAD
 // const API_KEY = process.env.GEMINI_API_KEY;
     const API_KEY = "AIzaSyC-qa1FWlOxmD6i8aLxd6-PZxIOmbzF7ks"
+=======
+const API_KEY = process.env.GEMINI_API_KEY;
+>>>>>>> 1dc47d7713352974602a83a9273223c8f547e07b
 const MODEL_NAME = "gemini-1.5-flash"; // Or read from env: process.env.GEMINI_MODEL_NAME || "gemini-1.5-flash";
 
 if (!API_KEY) {

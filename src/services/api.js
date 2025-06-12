@@ -48,19 +48,46 @@ api.interceptors.response.use(
     }
 );
 
+<<<<<<< HEAD
 export const signupUser = (userData) => api.post('/auth/signup', userData);
 export const signinUser = (userData) => api.post('/auth/signin', userData);
 export const sendMessage = (messageData) => api.post('/chat/message', messageData);
 export const saveChatHistory = (historyData) => api.post('/chat/history', historyData);
+=======
+// client/src/services/api.js
+// ... (axios instance and interceptors as before) ...
+
+// Authentication
+export const signupUser = (userData) => api.post('/auth/signup', userData);
+export const signinUser = (userData) => api.post('/auth/signin', userData);
+
+// Chat Interaction
+export const sendMessage = (messageData) => api.post('/chat/message', messageData);
+export const saveChatHistory = (historyData) => api.post('/chat/history', historyData);
+
+// RAG Query
+// queryData can be { message } or { message, targetOriginalNames }
+>>>>>>> 1dc47d7713352974602a83a9273223c8f547e07b
 export const queryRagService = (queryData) => api.post('/chat/rag', queryData);
 export const getChatSessions = () => api.get('/chat/sessions');
 export const getSessionDetails = (sessionId) => api.get(`/chat/session/${sessionId}`);
+<<<<<<< HEAD
 export const uploadFile = (formData) => api.post('/upload', formData); // Keep this
+=======
+
+// File Upload
+export const uploadFile = (formData) => api.post('/upload', formData);
+
+// File Management
+>>>>>>> 1dc47d7713352974602a83a9273223c8f547e07b
 export const getUserFiles = () => api.get('/files');
 export const renameUserFile = (serverFilename, newOriginalName) => api.patch(`/files/${serverFilename}`, { newOriginalName });
 export const deleteUserFile = (serverFilename) => api.delete(`/files/${serverFilename}`);
 
+<<<<<<< HEAD
 // --- ADD SPEECH TRANSCRIPTION API CALL ---
 export const transcribeAudio = (formData) => api.post('/speech/transcribe', formData);
 
+=======
+>>>>>>> 1dc47d7713352974602a83a9273223c8f547e07b
 export default api;
