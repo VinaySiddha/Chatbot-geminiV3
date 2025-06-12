@@ -3,7 +3,7 @@
 import os
 import faiss
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.embeddings import Embeddings as LangchainEmbeddings
 from langchain_core.documents import Document as LangchainDocument
 from langchain_community.docstore import InMemoryDocstore
@@ -211,7 +211,7 @@ def load_or_create_index(user_id):
         raise RuntimeError(f"Failed to initialize FAISS index for user '{user_id}'")
 
 
-def add_documents_to_index(user_id, documents: list[LangchainDocument]):
+#
     if not documents:
         logger.warning(f"No documents provided to add for user '{user_id}'.")
         return
@@ -272,7 +272,7 @@ def add_documents_to_index(user_id, documents: list[LangchainDocument]):
     except Exception as e:
         logger.error(f"Error adding documents for user '{user_id}': {e}", exc_info=True)
         # Don't re-raise here if app.py handles it, but ensure logging is clear
-        raise # Re-raise the exception so app.py can catch it and return 500
+        #
 
 def query_index(user_id, query_text, k=3):
     all_results_with_scores = []

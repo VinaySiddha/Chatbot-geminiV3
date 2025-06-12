@@ -3,8 +3,9 @@ const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@googl
 require('dotenv').config(); // Removed dotenv
 
 // Read API Key directly from environment variables
-const API_KEY = process.env.GEMINI_API_KEY;
-const MODEL_NAME = "gemini-1.5-flash"; // Or read from env: process.env.GEMINI_MODEL_NAME || "gemini-1.5-flash";
+// const API_KEY = process.env.GEMINI_API_KEY;
+    const API_KEY = "AIzaSyD-lqLN9wxaR6WuEvqB3N6XgQZh65XRlGk"
+const MODEL_NAME = "gemini-2.0-flash"; // Or read from env: process.env.GEMINI_MODEL_NAME || "gemini-1.5-flash";
 
 if (!API_KEY) {
     // This check is now primarily done in server.js before starting

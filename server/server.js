@@ -1,95 +1,73 @@
 // server/server.js
 const express = require('express');
-// const dotenv = require('dotenv'); // Removed dotenv
 const cors = require('cors');
 const path = require('path');
 const { getLocalIPs } = require('./utils/networkUtils');
 const fs = require('fs');
 const axios = require('axios');
-const os = require('os');
-const mongoose = require('mongoose'); // Import mongoose for closing connection
-const readline = require('readline').createInterface({ // For prompting
+const mongoose = require('mongoose');
+const readline = require('readline').createInterface({
   input: process.stdin,
   output: process.stdout,
 });
 
-// --- Custom Modules ---
 const connectDB = require('./config/db');
 const { performAssetCleanup } = require('./utils/assetCleanup');
 
-// --- Configuration Loading ---
-// dotenv.config(); // Removed dotenv
-
-// --- Configuration Defaults & Variables ---
 const DEFAULT_PORT = 5001;
-const DEFAULT_MONGO_URI = 'mongodb+srv://admin:root@cluster59.vjp7w.mongodb.net/chatbot?retryWrites=true&w=majority&appName=Cluster59'; // Default DB URI
-const DEFAULT_PYTHON_RAG_URL = 'http://127.0.0.1:5002'; // Default RAG service URL
+const DEFAULT_MONGO_URI = 'mongodb+srv://admin:root@cluster59.vjp7w.mongodb.net/chatbot?retryWrites=true&w=majority&appName=Cluster59';
+const DEFAULT_PYTHON_RAG_URL = 'http://127.0.0.1:5002';
 
-let port = process.env.PORT || DEFAULT_PORT; // Use environment variable PORT if set, otherwise default
-let mongoUri = process.env.MONGO_URI || ''; // Use environment variable if set
-let pythonRagUrl = process.env.PYTHON_RAG_SERVICE_URL || ''; // Use environment variable if set
-let geminiApiKey = process.env.GEMINI_API_KEY || ''; // MUST be set via environment
+let port = process.env.PORT || DEFAULT_PORT;
+let mongoUri = process.env.MONGO_URI || '';
+let pythonRagUrl = process.env.PYTHON_RAG_SERVICE_URL || '';
+let geminiApiKey = process.env.GEMINI_API_KEY || '';
+let openaiApiKey = process.env.OPENAI_API_KEY || ''; // <--- ADD THIS
 
-// --- Express Application Setup ---
 const app = express();
-
-// --- Core Middleware ---
-app.use(cors()); // Allows requests from frontend (potentially on different IPs in LAN)
+app.use(cors());
 app.use(express.json());
 
-// --- Basic Root Route ---
 app.get('/', (req, res) => res.send('Chatbot Backend API is running...'));
 
-// --- API Route Mounting ---
-app.use('/api/network', require('./routes/network')); // For IP info
+app.use('/api/network', require('./routes/network'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/upload', require('./routes/upload'));
 app.use('/api/files', require('./routes/files'));
-app.use('/api/syllabus', require('./routes/syllabus')); // <-- ADD THIS LINE
+app.use('/api/syllabus', require('./routes/syllabus'));
+app.use('/api/speech', require('./routes/speech')); // <--- ADD THIS ROUTE
 
-
-
-// --- Centralized Error Handling Middleware ---
 app.use((err, req, res, next) => {
     console.error("Unhandled Error:", err.stack || err);
     const statusCode = err.status || 500;
     let message = err.message || 'An internal server error occurred.';
-    // Sanitize potentially sensitive error details in production
     if (process.env.NODE_ENV === 'production' && statusCode === 500) {
         message = 'An internal server error occurred.';
     }
-    // Ensure response is JSON for API routes
     if (req.originalUrl.startsWith('/api/')) {
          return res.status(statusCode).json({ message: message });
     }
-    // Fallback for non-API routes if any
     res.status(statusCode).send(message);
 });
 
-// --- Server Instance Variable ---
 let server;
-
-// --- Graceful Shutdown Logic ---
 const gracefulShutdown = async (signal) => {
     console.log(`\n${signal} received. Shutting down gracefully...`);
-    readline.close(); // Close readline interface
+    readline.close();
     try {
-        // Close HTTP server first to stop accepting new connections
         if (server) {
             server.close(async () => {
                 console.log('HTTP server closed.');
-                // Close MongoDB connection
                 try {
                     await mongoose.connection.close();
                     console.log('MongoDB connection closed.');
                 } catch (dbCloseError) {
                     console.error("Error closing MongoDB connection:", dbCloseError);
                 }
-                process.exit(0); // Exit after server and DB are closed
+                process.exit(0);
             });
         } else {
-             // If server wasn't assigned, try closing DB and exit
              try {
                  await mongoose.connection.close();
                  console.log('MongoDB connection closed.');
@@ -98,27 +76,22 @@ const gracefulShutdown = async (signal) => {
              }
             process.exit(0);
         }
-
-        // Force exit after timeout if server.close callback doesn't finish
         setTimeout(() => {
             console.error('Graceful shutdown timed out, forcing exit.');
             process.exit(1);
-        }, 10000); // 10 seconds
-
+        }, 10000);
     } catch (shutdownError) {
         console.error("Error during graceful shutdown initiation:", shutdownError);
         process.exit(1);
     }
 };
-
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// --- RAG Service Health Check ---
 async function checkRagService(url) {
     console.log(`\nChecking RAG service health at ${url}...`);
     try {
-        const response = await axios.get(`${url}/health`, { timeout: 7000 }); // 7 second timeout
+        const response = await axios.get(`${url}/health`, { timeout: 7000 });
         if (response.status === 200 && response.data?.status === 'ok') {
             console.log('✓ RAG service is available and healthy.');
             console.log(`  Embedding: ${response.data.embedding_model_type} (${response.data.embedding_model_name})`);
@@ -146,32 +119,27 @@ async function checkRagService(url) {
     }
 }
 
-// --- Directory Structure Check (Simplified) ---
 async function ensureServerDirectories() {
     const dirs = [
         path.join(__dirname, 'assets'),
         path.join(__dirname, 'backup_assets'),
-        // Add other essential dirs if needed
+        path.join(__dirname, 'temp_audio'), // <--- ADD TEMP AUDIO DIR
     ];
     console.log("\nEnsuring server directories exist...");
     try {
         for (const dir of dirs) {
-            // Check existence synchronously, create asynchronously
             if (!fs.existsSync(dir)) {
                 await fs.promises.mkdir(dir, { recursive: true });
                 console.log(`  Created directory: ${dir}`);
-            } else {
-                // console.log(`  Directory exists: ${dir}`); // Optional: be less verbose
             }
         }
         console.log("✓ Server directories checked/created.");
     } catch (error) {
         console.error('!!! Error creating essential server directories:', error);
-        throw error; // Prevent server start if essential dirs fail
+        throw error;
     }
 }
 
-// --- Prompt for Configuration ---
 function askQuestion(query) {
     return new Promise(resolve => readline.question(query, resolve));
 }
@@ -179,68 +147,68 @@ function askQuestion(query) {
 async function configureAndStart() {
     console.log("--- Starting Server Configuration ---");
 
-    // 1. Gemini API Key Check
     if (!geminiApiKey) {
         console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
         console.error("!!! FATAL: GEMINI_API_KEY environment variable is not set. !!!");
-        console.error("!!! Please set it before running the server:               !!!");
-        console.error("!!! export GEMINI_API_KEY='YOUR_API_KEY'                   !!!");
         console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
         process.exit(1);
     } else {
         console.log("✓ GEMINI_API_KEY found.");
     }
 
-    // 2. MongoDB URI
+    // <--- ADD OPENAI_API_KEY CHECK AND PROMPT --->
+    if (!openaiApiKey) {
+        const answer = await askQuestion(`Enter OpenAI API Key (for Whisper) or press Enter to skip (STT will be disabled): `);
+        openaiApiKey = answer.trim() || '';
+        if (!openaiApiKey) {
+            console.warn("!!! OpenAI API Key not provided. Speech-to-text (Whisper) will be disabled. !!!");
+        }
+    }
+    if (openaiApiKey) {
+        console.log("✓ OPENAI_API_KEY found (or provided).");
+    }
+    // <--- END OPENAI_API_KEY CHECK --->
+
     if (!mongoUri) {
         const answer = await askQuestion(`Enter MongoDB URI or press Enter for default (${DEFAULT_MONGO_URI}): `);
         mongoUri = answer.trim() || DEFAULT_MONGO_URI;
     }
     console.log(`Using MongoDB URI: ${mongoUri}`);
 
-    // 3. Python RAG Service URL
     if (!pythonRagUrl) {
         const answer = await askQuestion(`Enter Python RAG Service URL or press Enter for default (${DEFAULT_PYTHON_RAG_URL}): `);
         pythonRagUrl = answer.trim() || DEFAULT_PYTHON_RAG_URL;
     }
     console.log(`Using Python RAG Service URL: ${pythonRagUrl}`);
-
-    // 4. Port (Optional override via prompt, primarily uses ENV or default)
-    // You could add a prompt here if needed, but ENV variable is common practice
     console.log(`Node.js server will listen on port: ${port}`);
 
-    readline.close(); // Close the prompt interface
+    readline.close();
 
-    // --- Pass configuration to other modules (if needed) ---
-    // We'll make connectDB and services read directly or pass via function calls
-    process.env.MONGO_URI = mongoUri; // Set for db.js
-    process.env.PYTHON_RAG_SERVICE_URL = pythonRagUrl; // Set for chat.js, upload.js
-    // GEMINI_API_KEY is already in process.env
+    process.env.MONGO_URI = mongoUri;
+    process.env.PYTHON_RAG_SERVICE_URL = pythonRagUrl;
+    process.env.GEMINI_API_KEY = geminiApiKey; // Already done from initial load
+    process.env.OPENAI_API_KEY = openaiApiKey; // <--- SET FOR SPEECH ROUTE
 
     console.log("--- Configuration Complete ---");
-
-    // --- Proceed with Server Startup ---
     await startServer();
 }
 
-
-// --- Asynchronous Server Startup Function ---
 async function startServer() {
     console.log("\n--- Starting Server Initialization ---");
     try {
-        await ensureServerDirectories(); // Check/create assets, backup_assets dirs
-        await connectDB(mongoUri); // Connect to MongoDB - Pass URI explicitly
-        await performAssetCleanup(); // Backup existing assets, create fresh user folders
-        await checkRagService(pythonRagUrl); // Check Python RAG service status
+        await ensureServerDirectories();
+        await connectDB(mongoUri);
+        await performAssetCleanup();
+        await checkRagService(pythonRagUrl);
 
-        const PORT = port; // Use the configured port
-        const availableIPs = getLocalIPs(); // Get all local IPs
+        const PORT = port;
+        const availableIPs = getLocalIPs();
 
-        server = app.listen(PORT, '0.0.0.0', () => { // Listen on all interfaces
+        server = app.listen(PORT, '0.0.0.0', () => {
             console.log('\n=== Node.js Server Ready ===');
             console.log(`🚀 Server listening on port ${PORT}`);
             console.log('   Access the application via these URLs (using common frontend ports):');
-            const frontendPorts = [3000, 3001, 8080, 5173]; // Common React/Vite ports
+            const frontendPorts = [3000, 3001, 8080, 5173];
             availableIPs.forEach(ip => {
                  frontendPorts.forEach(fp => {
                     console.log(`   - http://${ip}:${fp} (Frontend) -> Connects to Backend at http://${ip}:${PORT}`);
@@ -256,9 +224,8 @@ async function startServer() {
         console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
         console.error("!!! Failed to start Node.js server:", error.message);
         console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-        process.exit(1); // Exit if initialization fails
+        process.exit(1);
     }
 }
 
-// --- Execute Configuration and Server Start ---
 configureAndStart();
